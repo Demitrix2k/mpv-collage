@@ -48,7 +48,7 @@ Needs `ffmpeg`/`ffprobe`, Python 3 with [Pillow](https://python-pillow.org) (`mp
 
 ### In mpv
 
-`Ctrl+Shift+C` makes a collage. If the folder of the playing file holds several videos (a season), the collage uses the whole folder, otherwise just that file. `Ctrl+Shift+S` makes a contact sheet of the playing file. Local files only. Results go to `~/Pictures/mpv/`, and the path is shown on screen.
+`Ctrl+Shift+C` makes a collage. If the folder of the playing file holds several videos (a season), the collage uses the whole folder, otherwise just that file. `Ctrl+Shift+S` makes a contact sheet of the playing file. Each press of `Ctrl+Shift+C` uses a new random seed, so pressing it again gives a different spin; the seed is shown on screen and in the file name (`<title>-collage-seed1657.jpg`), so nothing is overwritten and you can recreate a good one with `--seed`. Local files only. Results go to `~/Pictures/mpv/`, and the path is shown on screen.
 
 ### In fish
 

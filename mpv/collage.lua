@@ -1,5 +1,6 @@
 -- collage.lua: poster-style collage of the current movie or season.
 -- Bound to ctrl+shift+c in input.conf; the work is done by mpv-collage.
+-- Every press uses a new random seed (shown on screen, and in the file name).
 -- If the file's folder holds several videos (a season) the collage uses the
 -- whole folder, otherwise just this file.
 local mp = require 'mp'
@@ -9,6 +10,9 @@ local bindir = os.getenv('XDG_BIN_HOME') or (os.getenv('HOME') .. '/.local/bin')
 local script = bindir .. '/mpv-collage'
 local video_ext = { mkv = 1, mp4 = 1, m4v = 1, avi = 1, mov = 1, webm = 1, ts = 1, wmv = 1 }
 local running = false
+
+-- A fresh seed on every press, so pressing it again gives a different spin.
+math.randomseed(os.time() + math.floor(mp.get_time() * 1000))
 
 local function video_count(dir)
     local n = 0
@@ -31,18 +35,19 @@ local function make_collage()
     path = mp.command_native({ 'normalize-path', path })
     local dir = utils.split_path(path):gsub('/$', '')
     local target = video_count(dir) > 1 and dir or path
+    local seed = math.random(1, 9999)
     running = true
     mp.osd_message('Collage: working...', 120)
     mp.command_native_async({
         name = 'subprocess',
-        args = { script, target },
+        args = { script, target, '--seed', tostring(seed) },
         capture_stdout = true,
         capture_stderr = true,
     }, function(success, res)
         running = false
         if success and res.status == 0 then
             local out = res.stdout:gsub('%s+$', ''):match('[^\n]+$')
-            mp.osd_message('Collage saved: ' .. out, 8)
+            mp.osd_message('Collage saved (seed ' .. seed .. '): ' .. out, 8)
             mp.msg.info('collage: ' .. out)
         else
             mp.osd_message('Collage failed (see log)', 6)
