@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# mpv-contact-sheet: MPC-HC style thumbnail sheet for a media file.
+# A header block (file name, size, duration, video and audio info) above a grid
+# of evenly spaced frames, each stamped with its timestamp in the corner.
+# Needs ffmpeg, ffprobe and ImageMagick (magick).
+#
+# Usage: mpv-contact-sheet [-c COLUMNS] [-r ROWS] [-w WIDTH] [-o OUTPUT] [-n NAME] FILE
+# -n sets the file name shown in the header, e.g. a cleaned-up "Title (Year).mkv".
+# Defaults: 4 columns, 6 rows, 1920 px wide, ~/Pictures/mpv/<name>-contact.jpg
+set -euo pipefail
+
+cols=4 rows=6 width=1920 out='' shown=''
+while getopts 'c:r:w:o:n:h' opt; do
+    case $opt in
+        c) cols=$OPTARG ;;
+        r) rows=$OPTARG ;;
+        w) width=$OPTARG ;;
+        o) out=$OPTARG ;;
+        n) shown=$OPTARG ;;
+        *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 1 ] || { echo "contact-sheet: need exactly one FILE" >&2; exit 2; }
+file=$1
+[ -f "$file" ] || { echo "contact-sheet: not a file: $file" >&2; exit 2; }
+
+font=$(fc-match -f '%{file}' 'DejaVu Sans')
+name=$(basename "$file")
+shown=${shown:-$name}
+[ -n "$out" ] || { mkdir -p "$HOME/Pictures/mpv"; out="$HOME/Pictures/mpv/${name%.*}-contact.jpg"; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# --- probe -------------------------------------------------------------------
+probe() { ffprobe -v error "$@" -of default=nw=1 "$file"; }
+duration=$(probe -show_entries format=duration | sed 's/^duration=//')
+size_bytes=$(stat -c %s "$file")
+vcodec='' vw='' vh='' vfps='' vbr='' acodec='' ach='' asr=''
+while IFS== read -r k v; do
+    case $k in
+        codec_name) vcodec=$v ;; width) vw=$v ;; height) vh=$v ;;
+        avg_frame_rate) vfps=$v ;; bit_rate) vbr=$v ;;
+    esac
+done < <(probe -select_streams v:0 -show_entries stream=codec_name,width,height,avg_frame_rate,bit_rate)
+while IFS== read -r k v; do
+    case $k in codec_name) acodec=$v ;; channels) ach=$v ;; sample_rate) asr=$v ;; esac
+done < <(probe -select_streams a:0 -show_entries stream=codec_name,channels,sample_rate)
+[ -n "$vw" ] || { echo "contact-sheet: no video stream in $file" >&2; exit 1; }
+
+fmt_time() { awk -v s="$1" 'BEGIN { s = int(s); printf "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60 }'; }
+
+# --- frames ------------------------------------------------------------------
+n=$((cols * rows))
+fw=$((width / cols - 8))                       # 4 px of space around each cell
+fh=$(( (fw * vh / vw + 1) / 2 * 2 ))
+font_pt=$((fw / 22 < 12 ? 12 : fw / 22))
+
+extract() {
+    local i=$1 t=$2 ts raw=$tmp/raw$1.png
+    ts=$(fmt_time "$t")
+    if ! ffmpeg -v error -ss "$t" -i "$file" -an -sn -frames:v 1 -vf "scale=$fw:$fh" -y "$raw" 2>/dev/null \
+        || [ ! -s "$raw" ]; then
+        magick -size "${fw}x${fh}" xc:black "$raw"
+    fi
+    magick "$raw" -font "$font" -pointsize "$font_pt" -gravity SouthEast \
+        -stroke black -strokewidth 3 -fill black -annotate +8+6 "$ts" \
+        -stroke none -fill white -annotate +8+6 "$ts" \
+        "$tmp/f$(printf %03d "$i").jpg"
+    rm -f "$raw"
+}
+export -f extract fmt_time
+export file tmp fw fh font font_pt
+
+# Frame i is taken at the middle of the i-th of n equal slices of the file.
+awk -v d="$duration" -v n="$n" 'BEGIN { for (i = 0; i < n; i++) printf "%d %.3f\n", i, d * (i + 0.5) / n }' \
+    | xargs -P "$(nproc)" -n 2 bash -c 'extract "$@"' _
+
+magick montage "$tmp"/f*.jpg -tile "${cols}x${rows}" -geometry '+4+4' -background white "$tmp/grid.png"
+
+# --- header ------------------------------------------------------------------
+fps=$(awk -v r="$vfps" 'BEGIN { split(r, a, "/"); if (a[2] > 0) printf "%.3f", a[1] / a[2] }')
+vinfo="$vcodec  ${vw}x${vh}"
+[ -n "$fps" ] && vinfo+="  ${fps} fps"
+[ -n "$vbr" ] && [ "$vbr" != N/A ] && vinfo+="  $((vbr / 1000)) kb/s"
+ainfo='none'
+[ -n "$acodec" ] && ainfo="$acodec  ${ach} ch  ${asr} Hz"
+header=$(printf 'File Name: %s\nFile Size: %s (%s bytes)\nResolution: %sx%s\nDuration: %s\nVideo: %s\nAudio: %s' \
+    "$shown" "$(numfmt --to=iec-i --suffix=B --format=%.2f "$size_bytes")" "$size_bytes" \
+    "$vw" "$vh" "$(fmt_time "$duration")" "$vinfo" "$ainfo")
+
+magick -background white -fill black -font "$font" -pointsize 22 -gravity West label:"$header" \
+    -bordercolor white -border 16 \
+    -gravity West -background white -extent "${width}x" "$tmp/header.png"
+
+magick "$tmp/header.png" "$tmp/grid.png" -background white -append -quality 92 "$out"
+echo "$out"
